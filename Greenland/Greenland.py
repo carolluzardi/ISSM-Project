@@ -8,7 +8,7 @@ md.miscellaneous.name = 'SeaRISEgreenland'
 md.mesh.epsg = 3413
 
 print('   Loading SeaRISE data from NetCDF')
-ncdata = Dataset('./Greenland/Greenland_5km_dev1.2.nc', mode='r')
+ncdata = Dataset('./Greenland_5km_dev1.2.nc', mode='r')
 x1 = np.squeeze(ncdata.variables['x1'][:].data)
 y1 = np.squeeze(ncdata.variables['y1'][:].data)
 usrf = np.squeeze(ncdata.variables['usrf'][:].data)
