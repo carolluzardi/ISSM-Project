@@ -1,0 +1,166 @@
+#!/usr/bin/env python
+
+from numpy import *
+
+#Name and hemisphere
+md.miscellaneous.name='ISSMoutputforMIP'
+md.mesh.hemisphere='n'
+
+#Load SeaRISE dataset
+import netCDF4
+from scipy.io          import loadmat, netcdf_file
+
+print('   Loading SeaRISE data from NetCDF')
+ncdata = './Greenland/Greenland_5km_dev1.2.nc'
+
+file = netCDF4.Dataset(ncdata,'r')
+
+x2 = file.variables['x1'][:]
+y2 = file.variables['y1'][:]
+#velx = file.variables['surfvelx'][:]
+#vely = file.variables['surfvely'][:]
+temp = file.variables['airtemp2m'][:]
+smb = file.variables['smb'][:]
+thk = file.variables['thk'][:]
+bed = file.variables['topg'][:]
+usrf = file.variables['usrf'][:]
+#gflux = file.variables['bheatflx'][:]
+file.close()
+
+# Change data type from double pyarray to int64
+x2=x2.astype('int64')
+y2=y2.astype('int64')
+#velx=velx.astype('int64')
+#vely=vely.astype('int64')
+thk=thk.astype('int64')
+bed=bed.astype('int64')
+temp=temp.astype('int64')
+smb=smb.astype('int64')
+usrf=usrf.astype('int64')
+gflux=gflux.astype('int64')
+
+# Convert matrix data into the correct dimensions
+#velx=velx.transpose()
+#vely=vely.transpose()
+#thk=thk.transpose()
+#topg=topg.transpose()
+temp=temp.transpose()
+smb=smb.transpose()
+#usrf=usrf.transpose()
+#gflux=gflux.transpose()
+#velx=velx.reshape(301,561)
+#vely=vely.reshape(301,561)
+#thk=thk.reshape(301,561)
+#topg=topg.reshape(301,561)
+temp=temp.reshape(301,561)
+smb=smb.reshape(301,561)
+#usrf=usrf.reshape(301,561)
+#gflux=gflux.reshape(301,561)
+
+
+#from m1qn3inversion import *
+#md.inversion=m1qn3inversion()
+print('   Interpolating surface and bedrock')
+import InterpFromGridToMesh
+#md.geometry.base = InterpFromGridToMesh.InterpFromGridToMesh(x3,y3,bed,md.mesh.x,md.mesh.y,0)
+#md.geometry.base=array(md.geometry.base[0])
+md.geometry.surface = InterpFromGridToMesh.InterpFromGridToMesh(x3,y3,usrf,md.mesh.x,md.mesh.y,0)
+md.geometry.surface=array(md.geometry.surface[0])
+md.geometry.thickness = InterpFromGridToMesh.InterpFromGridToMesh(x3,y3,thk,md.mesh.x,md.mesh.y,0)
+md.geometry.thickness = array(md.geometry.thickness[0])
+md.inversion.thickness_obs=md.geometry.thickness.copy()
+md.geometry.thickness[md.geometry.thickness<=0]=0.001
+
+#md.geometry.thickness = md.geometry.surface-md.geometry.base
+
+print('   Constructing thickness')
+md.geometry.base=md.geometry.surface-md.geometry.thickness
+md.geometry.bed=md.geometry.base.copy()
+
+md.mask.ice_levelset[md.geometry.thickness<10]=1
+md.mask.ice_levelset[floor(md.geometry.thickness)==10]=0
+
+#Set min thickness to 10 meters
+#pos0=(array(md.geometry.thickness) <= 10).nonzero()
+#print(pos0)
+#md.geometry.thickness[pos0]=0
+#md.geometry.surface=md.geometry.thickness+md.geometry.base
+
+
+print('   Interpolating velocities ')
+md.inversion.vx_obs  = InterpFromGridToMesh.InterpFromGridToMesh(x1,flipud(y1),flipud(velx.transpose()),md.mesh.x,md.mesh.y,NaN)
+md.inversion.vy_obs  = InterpFromGridToMesh.InterpFromGridToMesh(x1,flipud(y1),flipud(vely.transpose()),md.mesh.x,md.mesh.y,NaN)
+md.inversion.vel_obs = InterpFromGridToMesh.InterpFromGridToMesh(x1,flipud(y1),flipud(velMag.transpose()),md.mesh.x,md.mesh.y,NaN)
+md.inversion.vx_obs = array(md.inversion.vx_obs[0])
+md.inversion.vy_obs = array(md.inversion.vy_obs[0])
+md.inversion.vel_obs = array(md.inversion.vel_obs[0])
+md.inversion.vx_obs[md.inversion.vx_obs<=-10000]=0
+md.inversion.vx_obs[md.inversion.vx_obs>=10000]=10000
+md.inversion.vy_obs[md.inversion.vy_obs<=-10000]=0
+md.inversion.vy_obs[md.inversion.vy_obs>=10000]=10000
+md.inversion.vel_obs[md.inversion.vel_obs<=0]=0
+md.inversion.vel_obs[md.inversion.vel_obs>=10000]=10000
+md.initialization.vx = md.inversion.vx_obs.copy()
+md.initialization.vy = md.inversion.vy_obs.copy()
+md.initialization.vz = zeros((md.mesh.numberofvertices,1))
+md.initialization.vel= md.inversion.vel_obs.copy()
+
+print('   Interpolating temperatures')
+md.initialization.temperature=InterpFromGridToMesh.InterpFromGridToMesh(x2,y2,temp.transpose(),md.mesh.x,md.mesh.y,0)
+md.initialization.temperature=array(md.initialization.temperature[0:1])
+md.initialization.temperature=add(md.initialization.temperature.transpose(),273.15) #convert to Kelvin
+
+print('   Interpolating surface mass balance')
+md.surfaceforcings.mass_balance=InterpFromGridToMesh.InterpFromGridToMesh(x2,y2,smb.transpose(),md.mesh.x,md.mesh.y,0)
+md.surfaceforcings.mass_balance=array(md.surfaceforcings.mass_balance[0])
+md.surfaceforcings.mass_balance=divide(multiply(md.surfaceforcings.mass_balance,md.materials.rho_water),md.materials.rho_ice)
+
+print('   Construct basal friction parameters')
+md.friction.coefficient=multiply(30,ones((md.mesh.numberofvertices,1)))
+md.friction.coefficient=md.friction.coefficient.flatten()
+#VMAG=sqrt(inner(md.initialization.vel, md.initialization.vel)+0.1)
+#VMAG[VMAG<0.1]=0.1
+#md.friction.coefficient=sqrt(divide((md.materials.rho_ice*md.constants.g*md.geometry.thickness*abs(gradient(divide(md.geometry.surface,1)))),VMAG))
+
+pos=(array(md.mask.groundedice_levelset[0]) < 0).nonzero()
+md.friction.coefficient[pos]=0 #no friction applied on floating ice
+md.friction.p=ones((md.mesh.numberofelements,1))
+md.friction.q=ones((md.mesh.numberofelements,1))
+
+print('   Construct ice rheological properties')
+md.materials.rheology_n=multiply(3,ones((md.mesh.numberofelements,1)))
+import paterson
+md.materials.rheology_B=paterson.paterson(md.initialization.temperature)
+
+print('   Set other boundary conditions')
+md.mask.ice_levelset[(md.mesh.vertexonboundary==1).nonzero()]=0
+md.basalforcings.floatingice_melting_rate = zeros((md.mesh.numberofvertices,1))
+md.basalforcings.groundedice_melting_rate = zeros((md.mesh.numberofvertices,1))
+md.thermal.spctemperature     = md.initialization.temperature.copy() #impose observed temperature on surface
+md.thermal.isenthalpy = 1
+md.thermal.isdynamicbasalspc = 1
+md.initialization.waterfraction = zeros((md.mesh.numberofvertices,1))
+md.initialization.watercolumn = zeros((md.mesh.numberofvertices,1))
+md.masstransport.spcthickness    = multiply(NaN,ones((md.mesh.numberofvertices,1)))
+
+print('   Set geothermal heat flux')
+md.basalforcings.geothermalflux=InterpFromGridToMesh.InterpFromGridToMesh(x4,y4,gflux,md.mesh.x,md.mesh.y,0)
+md.basalforcings.geothermalflux=array(md.basalforcings.geothermalflux[0])
+
+print('   Set Pressure')
+md.initialization.pressure=multiply(multiply(md.materials.rho_ice,md.constants.g),md.geometry.thickness)
+md.initialization.pressure=array(md.initialization.pressure[0])
+
+print('   Single point constraint for continental model')
+#Set at least one vertex to velocity 0 so as to not get a singular problem (point on the wet peninsula)
+md.stressbalance.referential=multiply(NaN,ones((md.mesh.numberofvertices,6)))
+md.stressbalance.spcvx = multiply(NaN,ones((md.mesh.numberofvertices,1)))
+md.stressbalance.spcvy = multiply(NaN,ones((md.mesh.numberofvertices,1)))
+md.stressbalance.spcvz = multiply(NaN,ones((md.mesh.numberofvertices,1)))
+md.stressbalance.loadingforce=multiply(NaN,ones((md.mesh.numberofvertices,3)))
+location = multiply(1.0e+06,[.32011, -2.2039])
+location = location.astype('int64')
+pos=array(power(power((md.mesh.x - location[0]),2) + power((md.mesh.y -location[1]),2),.5)).argmin()
+md.stressbalance.spcvx[pos] = 0
+md.stressbalance.spcvy[pos] = 0
+md.stressbalance.spcvz[pos] = 0
